@@ -1,0 +1,1 @@
+rodar o docker-compose.yaml do repositório SocialGuard. para iniciar os serviços auxiliares.
