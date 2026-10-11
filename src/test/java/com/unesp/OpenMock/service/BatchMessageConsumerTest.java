@@ -1,0 +1,78 @@
+package com.unesp.OpenMock.service;
+
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import java.util.List;
+import java.util.UUID;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.amqp.AmqpRejectAndDontRequeueException;
+import org.springframework.retry.support.RetryTemplate;
+
+import com.unesp.OpenMock.service.BatchContracts.BatchResponse;
+import com.unesp.OpenMock.service.BatchContracts.BatchResultsRequest;
+import com.unesp.OpenMock.service.BatchContracts.CommentResponse;
+
+class BatchMessageConsumerTest {
+
+	private static final UUID BATCH_ID = UUID.fromString("b9e1aab3-6ff1-401d-8eee-ee19ab04b468");
+
+	private final SocialGuardClient socialGuardClient = mock(SocialGuardClient.class);
+	private final InferenceSimulator inferenceSimulator = mock(InferenceSimulator.class);
+	private final BatchMessageConsumer consumer =
+			new BatchMessageConsumer(socialGuardClient, inferenceSimulator, new RetryTemplate());
+
+	@Test
+	void acknowledgesDuplicateWithoutGeneratingOrSubmittingResults() {
+		var batch = new BatchResponse(List.of(new CommentResponse(12L)));
+		when(socialGuardClient.getBatch(BATCH_ID)).thenReturn(batch);
+		when(socialGuardClient.claimBatch(BATCH_ID)).thenReturn(false);
+
+		consumer.consume(BATCH_ID.toString());
+
+		verify(inferenceSimulator, never()).generate(batch);
+		verify(socialGuardClient, never()).submitResults(eq(BATCH_ID), any());
+	}
+
+	@Test
+	void submitsResultsOnlyAfterSuccessfulClaim() {
+		var batch = new BatchResponse(List.of(new CommentResponse(12L)));
+		var results = new BatchResultsRequest(List.of(), 100, "gpt-4");
+		when(socialGuardClient.getBatch(BATCH_ID)).thenReturn(batch);
+		when(socialGuardClient.claimBatch(BATCH_ID)).thenReturn(true);
+		when(inferenceSimulator.generate(batch)).thenReturn(results);
+
+		consumer.consume(BATCH_ID.toString());
+
+		verify(socialGuardClient).submitResults(BATCH_ID, results);
+	}
+
+	@Test
+	void reportsPermanentProcessingErrorsToSocialGuard() {
+		when(socialGuardClient.getBatch(BATCH_ID))
+				.thenThrow(new PermanentBatchProcessingException("SocialGuard rejected the batch"));
+
+		consumer.consume(BATCH_ID.toString());
+
+		verify(socialGuardClient).reportFailure(BATCH_ID, "SocialGuard rejected the batch");
+		verify(socialGuardClient, never()).claimBatch(BATCH_ID);
+	}
+
+	@Test
+	void acceptsUuidWithSurroundingWhitespace() {
+		consumer.consume(" \n" + BATCH_ID + "\t ");
+
+		verify(socialGuardClient).getBatch(BATCH_ID);
+		verify(socialGuardClient).claimBatch(BATCH_ID);
+	}
+
+	@Test
+	void rejectsInvalidIdentifiersWithoutCallingSocialGuard() {
+		for (String message : new String[] { "42", "not-a-uuid", "", "1-1-1-1-1", null }) {
+			assertThrows(AmqpRejectAndDontRequeueException.class, () -> consumer.consume(message));
+		}
+
+		verifyNoInteractions(socialGuardClient, inferenceSimulator);
+	}
+}
