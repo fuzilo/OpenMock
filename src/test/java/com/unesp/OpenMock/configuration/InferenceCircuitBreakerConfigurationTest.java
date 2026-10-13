@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 
@@ -46,6 +47,56 @@ class InferenceCircuitBreakerConfigurationTest {
 
 		assertEquals(CircuitBreaker.State.OPEN, circuitBreaker.getState());
 		assertThrows(CallNotPermittedException.class, () -> circuitBreaker.executeRunnable(() -> { }));
+	}
+
+	@Test
+	void staysClosedUntilTheMinimumNumberOfCallsIsReached() {
+		for (int call = 0; call < 3; call++) {
+			fail(circuitBreaker, new InferenceUnavailableException("unavailable"));
+		}
+
+		assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getState());
+	}
+
+	@Test
+	void staysClosedWhileTheFailureRateIsBelowTheThreshold() {
+		circuitBreaker.executeRunnable(() -> { });
+		circuitBreaker.executeRunnable(() -> { });
+		circuitBreaker.executeRunnable(() -> { });
+		fail(circuitBreaker, new InferenceUnavailableException("unavailable"));
+
+		assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getState());
+	}
+
+	@Test
+	void opensWhenTheSlowCallRateReachesTheThreshold() {
+		circuitBreaker.onSuccess(1, TimeUnit.SECONDS);
+		circuitBreaker.onSuccess(1, TimeUnit.SECONDS);
+		circuitBreaker.onSuccess(31, TimeUnit.SECONDS);
+		assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getState());
+		circuitBreaker.onSuccess(31, TimeUnit.SECONDS);
+
+		assertEquals(CircuitBreaker.State.OPEN, circuitBreaker.getState());
+	}
+
+	@Test
+	void closesAgainWhenTheHalfOpenTrialCallSucceeds() {
+		circuitBreaker.transitionToOpenState();
+		circuitBreaker.transitionToHalfOpenState();
+
+		circuitBreaker.executeRunnable(() -> { });
+
+		assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getState());
+	}
+
+	@Test
+	void reopensWhenTheHalfOpenTrialCallFails() {
+		circuitBreaker.transitionToOpenState();
+		circuitBreaker.transitionToHalfOpenState();
+
+		fail(circuitBreaker, new InferenceUnavailableException("unavailable"));
+
+		assertEquals(CircuitBreaker.State.OPEN, circuitBreaker.getState());
 	}
 
 	@Test

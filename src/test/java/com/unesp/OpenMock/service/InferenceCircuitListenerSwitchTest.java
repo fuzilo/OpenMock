@@ -26,4 +26,38 @@ class InferenceCircuitListenerSwitchTest {
 		order.verify(container, timeout(2000)).stop();
 		order.verify(container, timeout(2000)).start();
 	}
+
+	@Test
+	void stopsTheListenerWhenTheCircuitIsForcedOpen() {
+		when(listenerRegistry.getListenerContainer(BatchMessageConsumer.LISTENER_ID)).thenReturn(container);
+		new InferenceCircuitListenerSwitch(circuitBreaker, listenerRegistry);
+
+		circuitBreaker.transitionToForcedOpenState();
+
+		verify(container, timeout(2000)).stop();
+		verify(container, never()).start();
+	}
+
+	@Test
+	void keepsTheListenerRunningWhenTheCircuitClosesAfterHalfOpen() {
+		when(listenerRegistry.getListenerContainer(BatchMessageConsumer.LISTENER_ID)).thenReturn(container);
+		new InferenceCircuitListenerSwitch(circuitBreaker, listenerRegistry);
+
+		circuitBreaker.transitionToOpenState();
+		circuitBreaker.transitionToHalfOpenState();
+		circuitBreaker.transitionToClosedState();
+
+		verify(container, timeout(2000).times(2)).start();
+		verify(container, times(1)).stop();
+	}
+
+	@Test
+	void ignoresTransitionsWhenTheListenerContainerIsNotRegistered() {
+		new InferenceCircuitListenerSwitch(circuitBreaker, listenerRegistry);
+
+		circuitBreaker.transitionToOpenState();
+
+		verify(listenerRegistry, timeout(2000)).getListenerContainer(BatchMessageConsumer.LISTENER_ID);
+		verifyNoInteractions(container);
+	}
 }

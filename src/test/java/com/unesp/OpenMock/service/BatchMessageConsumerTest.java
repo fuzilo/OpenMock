@@ -28,6 +28,7 @@ class BatchMessageConsumerTest {
 	private final CircuitBreaker circuitBreaker = CircuitBreaker.of("openai", CircuitBreakerConfig.custom()
 			.slidingWindowSize(2)
 			.minimumNumberOfCalls(2)
+			.ignoreExceptions(PermanentBatchProcessingException.class)
 			.build());
 	private final BatchMessageConsumer consumer =
 			new BatchMessageConsumer(socialGuardClient, inferenceClient, new RetryTemplate(), circuitBreaker);
@@ -107,6 +108,57 @@ class BatchMessageConsumerTest {
 		assertThrows(ImmediateRequeueAmqpException.class, () -> consumer.consume(BATCH_ID.toString()));
 
 		verifyNoInteractions(socialGuardClient, inferenceClient);
+	}
+
+	@Test
+	void requeuesWithoutCallingSocialGuardWhileTheCircuitIsForcedOpen() {
+		circuitBreaker.transitionToForcedOpenState();
+
+		assertThrows(ImmediateRequeueAmqpException.class, () -> consumer.consume(BATCH_ID.toString()));
+
+		verifyNoInteractions(socialGuardClient, inferenceClient);
+	}
+
+	@Test
+	void reportsPermanentInferenceErrorsWithoutOpeningTheCircuit() {
+		var batch = new BatchResponse(List.of(new CommentResponse(12L)));
+		when(socialGuardClient.getBatch(BATCH_ID)).thenReturn(batch);
+		when(socialGuardClient.claimBatch(BATCH_ID)).thenReturn(true);
+		when(inferenceClient.generate(batch)).thenThrow(new PermanentBatchProcessingException("Invalid batch"));
+
+		consumer.consume(BATCH_ID.toString());
+		consumer.consume(BATCH_ID.toString());
+
+		verify(socialGuardClient, times(2)).reportFailure(BATCH_ID, "Invalid batch");
+		assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getState());
+	}
+
+	@Test
+	void reportsFailureWithoutCallingInferenceWhenTheCircuitOpensAfterTheClaim() {
+		var batch = new BatchResponse(List.of(new CommentResponse(12L)));
+		when(socialGuardClient.getBatch(BATCH_ID)).thenReturn(batch);
+		when(socialGuardClient.claimBatch(BATCH_ID)).thenAnswer(invocation -> {
+			circuitBreaker.transitionToOpenState();
+			return true;
+		});
+
+		consumer.consume(BATCH_ID.toString());
+
+		verify(socialGuardClient).reportFailure(eq(BATCH_ID), contains("is OPEN"));
+		verify(socialGuardClient, never()).submitResults(eq(BATCH_ID), any());
+		verifyNoInteractions(inferenceClient);
+	}
+
+	@Test
+	void doesNotCountSocialGuardFailuresAgainstTheCircuit() {
+		when(socialGuardClient.getBatch(BATCH_ID)).thenThrow(new IllegalStateException("SocialGuard is down"));
+
+		assertThrows(IllegalStateException.class, () -> consumer.consume(BATCH_ID.toString()));
+		assertThrows(IllegalStateException.class, () -> consumer.consume(BATCH_ID.toString()));
+
+		assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getState());
+		assertEquals(0, circuitBreaker.getMetrics().getNumberOfFailedCalls());
+		verifyNoInteractions(inferenceClient);
 	}
 
 	@Test
