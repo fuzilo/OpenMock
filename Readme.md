@@ -23,5 +23,19 @@ As configurações podem ser sobrescritas por variáveis de ambiente:
 | `SOCIALGUARD_CONNECT_TIMEOUT` / `SOCIALGUARD_READ_TIMEOUT` | `2s` / `10s` |
 | `INFERENCE_MINIMUM_TOKENS` / `INFERENCE_MAXIMUM_TOKENS` | `100` / `500` |
 | `INFERENCE_MODELS` | `gpt-4,gpt-3.5-turbo` |
+| `INFERENCE_SIMULATED_FAILURE_RATE` / `INFERENCE_SIMULATED_LATENCY` | `0.0` / `0s` |
+| `INFERENCE_CB_FAILURE_RATE_THRESHOLD` | `50` |
+| `INFERENCE_CB_SLIDING_WINDOW_SIZE` / `INFERENCE_CB_MINIMUM_NUMBER_OF_CALLS` | `10` / `5` |
+| `INFERENCE_CB_WAIT_DURATION_IN_OPEN_STATE` | `30s` |
+| `INFERENCE_CB_PERMITTED_CALLS_IN_HALF_OPEN_STATE` | `2` |
+| `INFERENCE_CB_SLOW_CALL_DURATION_THRESHOLD` / `INFERENCE_CB_SLOW_CALL_RATE_THRESHOLD` | `30s` / `50` |
+
+## Circuit breaker da inferência
+
+A inferência é chamada pela interface `InferenceClient`, hoje implementada pelo simulador, e passa pelo circuit breaker `openai` (Resilience4j). Falhas de `InferenceUnavailableException` e chamadas lentas contam para abrir o circuito; `PermanentBatchProcessingException` não conta.
+
+Com o circuito aberto, o consumidor devolve a mensagem à fila antes de consultar ou reivindicar o lote, e o listener é pausado até o circuito passar para meio-aberto. Se a inferência falhar depois da reivindicação, a falha é informada ao SocialGuard por `POST /api/v1/batches/{id}/failure`.
+
+Para ver o circuito abrir sem um provedor real, defina `INFERENCE_SIMULATED_FAILURE_RATE` (de `0.0` a `1.0`) e, se quiser, `INFERENCE_SIMULATED_LATENCY`. O estado fica em `/actuator/prometheus`, nas métricas `resilience4j_circuitbreaker_*` com `name="openai"`.
 
 As métricas permanecem disponíveis em `/actuator/prometheus`; a exportação OTLP de métricas foi desativada, pois o endpoint local configurado respondia `404`. A exportação de traces OTLP continua configurada separadamente.

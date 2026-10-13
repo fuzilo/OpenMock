@@ -19,6 +19,22 @@ public record BatchProcessingProperties(
 	public record Retry(int maxAttempts, Duration initialInterval, double multiplier, Duration maxInterval) {
 	}
 
-	public record Inference(int minimumTokens, int maximumTokens, List<String> models) {
+	public record Inference(
+			int minimumTokens,
+			int maximumTokens,
+			List<String> models,
+			double simulatedFailureRate,
+			Duration simulatedLatency,
+			CircuitBreaker circuitBreaker) {
+	}
+
+	public record CircuitBreaker(
+			float failureRateThreshold,
+			int slidingWindowSize,
+			int minimumNumberOfCalls,
+			Duration waitDurationInOpenState,
+			int permittedCallsInHalfOpenState,
+			Duration slowCallDurationThreshold,
+			float slowCallRateThreshold) {
 	}
 }
