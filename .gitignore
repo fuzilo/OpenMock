@@ -35,3 +35,9 @@ build/
 
 ### Claude Code ###
 .claude/
+
+### macOS ###
+.DS_Store
+
+### LibreOffice ###
+.~lock.*#
